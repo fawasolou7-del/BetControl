@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BetControl PWA Pro</title>
+<link rel="manifest" href="manifest.json">
+<style>
+body{margin:0;font-family:'Segoe UI',sans-serif;background:#0e0e0e;color:#fff;}
+header{background:#111;padding:20px;text-align:center;font-size:1.5em;font-weight:bold;color:#0ef45c;}
+main{padding:20px;}
+.section{margin-bottom:30px;}
+label{display:block;margin-top:10px;}
+input,select{width:100%;padding:8px;margin-top:5px;border-radius:5px;border:none;}
+button{padding:12px;margin-top:10px;width:100%;border:none;border-radius:5px;background-color:#0ef45c;color:#000;font-weight:bold;cursor:pointer;}
+button:hover{background-color:#0cd94e;}
+.alert{color:#ff3d3d;font-weight:bold;margin-top:10px;}
+.stats{background:#1a1a1a;padding:15px;border-radius:10px;margin-top:10px;}
+.stats p{margin:5px 0;}
+.dark-btn{background:#222;color:#0ef45c;margin-top:5px;}
+.dark-btn:hover{background:#333;}
+canvas{background:#111;border-radius:10px;margin-top:10px;}
+</style>
+</head>
+<body>
+<header>BetControl PWA Pro</header>
+<main>
+<div class="section">
+<h2>Dashboard</h2>
+<div class="stats">
+<p>Budget semaine: <span id="budgetWeek">5000</span></p>
+<p>Budget week-end: <span id="budgetWeekend">5000</span></p>
+<p>Total disponible: <span id="budgetTotal">10000</span></p>
+<p>Total misé: <span id="totalMise">0</span></p>
+<p>Total gagné: <span id="totalGain">0</span></p>
+<p>Bénéfice / Perte: <span id="profit">0</span></p>
+<p>% de réussite: <span id="successRate">0</span></p>
+<p>Objectif: <span id="objectif">30000</span></p>
+<p>Progression vers objectif: <span id="progress">0%</span></p>
+</div>
+<canvas id="graph" width="350" height="150"></canvas>
+</div>
+
+<div class="section">
+<h2>Ajouter un pari</h2>
+<label>Match</label><input type="text" id="match">
+<label>Type de pari</label>
+<select id="typePari">
+<option value="doubleChance">Double Chance</option>
+<option value="over2.5">Over 2.5</option>
+<option value="under2.5">Under 2.5</option>
+<option value="handicap">Handicap</option>
+</select>
+<label>Cote</label><input type="number" id="cote" step="0.01" min="1">
+<label>Mise</label><input type="number" id="mise" step="1" min="1">
+<label>Résultat</label>
+<select id="resultat">
+<option value="pending">En attente</option>
+<option value="gagne">Gagné</option>
+<option value="perdu">Perdu</option>
+<option value="rembourse">Remboursé</option>
+</select>
+<button onclick="ajouterPari()">Ajouter Pari</button>
+<p class="alert" id="alert"></p>
+</div>
+
+<div class="section">
+<h2>Planificateur stratégique & alertes</h2>
+<label>Objectif</label><input type="number" id="objectifInput" value="30000" step="100">
+<label>Nombre de paris prévus</label><input type="number" id="nbParis" value="5" step="1" min="1">
+<label>Cote moyenne visée</label><input type="number" id="coteMoyenne" value="2" step="0.01" min="1">
+<button onclick="calculerPlan()">Calculer Plan</button>
+<div class="stats" id="planResult"></div>
+<p class="alert" id="dailyAlert"></p>
+</div>
+
+<div class="section">
+<h2>Matchs du jour</h2>
+<button class="dark-btn" onclick="window.open('https://www.sofascore.com/fr', '_blank')">Voir sur SofaScore</button>
+</div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+if('serviceWorker' in navigator){navigator.serviceWorker.register('service-worker.js');}
+
+let paris=JSON.parse(localStorage.getItem('paris'))||[];
+let budgetWeek=5000;let budgetWeekend=5000;let objectif=30000;
+
+function updateDashboard(){
+let totalMise=paris.reduce((sum,p)=>sum+p.mise,0);
+let totalGain=paris.reduce((sum,p)=>sum+((p.resultat==='gagne')? p.mise*p.cote : (p.resultat==='rembourse'?p.mise:0)),0);
+let profit=totalGain-totalMise;
+let gagneCount=paris.filter(p=>p.resultat==='gagne').length;
+let successRate=paris.length? Math.round((gagneCount/paris.length)*100):0;
+let progress=Math.min(Math.round((profit/objectif)*100),100);
+
+document.getElementById('totalMise').innerText=totalMise;
+document.getElementById('totalGain').innerText=totalGain;
+document.getElementById('profit').innerText=profit;
+document.getElementById('successRate').innerText=successRate+'%';
+document.getElementById('progress').innerText=progress+'%';
+document.getElementById('budgetWeek').innerText=budgetWeek;
+document.getElementById('budgetWeekend').innerText=budgetWeekend;
+document.getElementById('budgetTotal').innerText=budgetWeek+budgetWeekend;
+document.getElementById('objectif').innerText=objectif;
+
+// Graphique
+const ctx=document.getElementById('graph').getContext('2d');
+const labels=paris.map((p,i)=>`P${i+1}`);
+const data=paris.map(p=>((p.resultat==='gagne')? p.mise*p.cote : (p.resultat==='rembourse'?p.mise:0)));
+if(window.chartInstance) window.chartInstance.destroy();
+window.chartInstance=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Gain par pari',data,borderColor:'#0ef45c',backgroundColor:'rgba(14,244,92,0.2)',tension:0.3}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+dailyAlert(profit,totalMise);
+}
+
+function ajouterPari(){
+let match=document.getElementById('match').value;
+let type=document.getElementById('typePari').value;
+let cote=parseFloat(document.getElementById('cote').value);
+let mise=parseFloat(document.getElementById('mise').value);
+let resultat=document.getElementById('resultat').value;
+let alertText='';
+
+if(!match||!cote||!mise){document.getElementById('alert').innerText='Veuillez remplir tous les champs.';return;}
+if(mise>budgetWeek+budgetWeekend) alertText='Attention : mise dépasse votre budget total !';
+paris.push({match,type,cote,mise,resultat});
+localStorage.setItem('paris',JSON.stringify(paris));
+document.getElementById('alert').innerText=alertText;
+updateDashboard();
+
+document.getElementById('match').value='';
+document.getElementById('cote').value='';
+document.getElementById('mise').value='';
+document.getElementById('resultat').value='pending';
+}
+
+function calculerPlan(){
+let obj=parseFloat(document.getElementById('objectifInput').value);
+let nb=parseInt(document.getElementById('nbParis').value);
+let coteMoy=parseFloat(document.getElementById('coteMoyenne').value);
+if(nb<=0||coteMoy<1){document.getElementById('planResult').innerHTML='Veuillez entrer des valeurs valides.';return;}
+let misePari=obj/((Math.pow(coteMoy,nb))-1);
+let misePariArrondi=Math.round(misePari);
+let tauxReussite=Math.ceil((Math.log(obj/(budgetWeek+budgetWeekend)+1)/Math.log(coteMoy))/nb*100);
+let risque=misePari*nb>(budgetWeek+budgetWeekend)?'🔴 Très agressif':'🟢 Raisonnable';
+document.getElementById('planResult').innerHTML=`Mise recommandée par pari : ${misePariArrondi} <br>Taux de réussite minimal : ${tauxReussite}% <br>Risque : ${risque}`;
+}
+
+// Notifications quotidiennes
+function dailyAlert(profit,totalMise){
+let reste=objectif-profit;
+let nbRestant=parseInt(document.getElementById('nbParis').value)-paris.filter(p=>p.resultat!=='pending').length;
+if(nbRestant<=0) nbRestant=1;
+let miseRecommandee=Math.round(reste/(Math.pow(parseFloat(document.getElementById('coteMoyenne').value),nbRestant)-1));
+document.getElementById('dailyAlert').innerText=`💡 Aujourd'hui: mise recommandée pour rester sur la trajectoire : ${miseRecommandee}`;
+
+if(Notification.permission==='granted'){
+  navigator.serviceWorker.ready.then(reg=>reg.showNotification('BetControl', {body:`Mise recommandée aujourd'hui: ${miseRecommandee}`, icon:'', tag:'daily-alert'}));
+}else if(Notification.permission!=='denied'){Notification.requestPermission();}
+}
+
+updateDashboard();
+</script>
+</body>
+</html>m
